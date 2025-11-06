@@ -3,6 +3,7 @@ import type { FormEvent } from 'react';
 import { FiSend, FiImage, FiX } from 'react-icons/fi';
 import { Button } from '../ui/Button';
 import { useChat } from '../../hooks/useChat';
+import { extractErrorMessage } from '../../utils/errorHandler';
 
 export const ChatInput = () => {
   const { sendMessage, uploadImage, isSending } = useChat();
@@ -79,12 +80,8 @@ export const ChatInput = () => {
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
-      } catch (err: any) {
-        const errorMessage = err.response?.data?.detail?.[0]?.msg || 
-                            err.response?.data?.message || 
-                            err.message || 
-                            'Failed to upload image. Please try again.';
-        setError(errorMessage);
+      } catch (err: unknown) {
+        setError(extractErrorMessage(err as Parameters<typeof extractErrorMessage>[0], 'Failed to upload image. Please try again.'));
       }
     } else if (message.trim()) {
       // Send text message
@@ -95,12 +92,8 @@ export const ChatInput = () => {
         if (textareaRef.current) {
           textareaRef.current.style.height = 'auto';
         }
-      } catch (err: any) {
-        const errorMessage = err.response?.data?.detail?.[0]?.msg || 
-                            err.response?.data?.message || 
-                            err.message || 
-                            'Failed to send message. Please try again.';
-        setError(errorMessage);
+      } catch (err: unknown) {
+        setError(extractErrorMessage(err as Parameters<typeof extractErrorMessage>[0], 'Failed to send message. Please try again.'));
       }
     }
   };

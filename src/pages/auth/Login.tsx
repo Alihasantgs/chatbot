@@ -8,6 +8,9 @@ import { Button } from '../../components/ui/Button';
 import { PasswordInput } from '../../components/auth/PasswordInput';
 import { ErrorAlert } from '../../components/auth/ErrorAlert';
 import { ROUTES } from '../../utils/constants';
+import { validateEmail, validatePasswordSimple } from '../../utils/validation';
+import { normalizeEmail } from '../../utils/normalize';
+import { extractErrorMessage } from '../../utils/errorHandler';
 
 export const Login = () => {
   const navigate = useNavigate();
@@ -20,86 +23,52 @@ export const Login = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
 
-  // Redirect to chat if already authenticated
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
       navigate(ROUTES.CHAT, { replace: true });
     }
   }, [isAuthenticated, authLoading, navigate]);
 
-  const validateEmail = (email: string): string | undefined => {
-    if (!email) {
-      return 'Email is required';
+  const handleEmailBlur = () => {
+    const normalized = normalizeEmail(formData.email);
+    if (normalized !== formData.email) {
+      setFormData((prev) => ({ ...prev, email: normalized }));
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return 'Please enter a valid email address';
-    }
-    return undefined;
-  };
-
-  const validatePassword = (password: string): string | undefined => {
-    if (!password) {
-      return 'Password is required';
-    }
-    if (password.length < 6) {
-      return 'Password must be at least 6 characters';
-    }
-    return undefined;
-  };
-
-  const validate = () => {
-    const newErrors: { email?: string; password?: string } = {};
-    
-    const emailError = validateEmail(formData.email);
+    const emailError = validateEmail(normalized);
     if (emailError) {
-      newErrors.email = emailError;
+      setErrors((prev) => ({ ...prev, email: emailError }));
     }
-    
-    const passwordError = validatePassword(formData.password);
+  };
+
+  const handlePasswordBlur = () => {
+    const passwordError = validatePasswordSimple(formData.password);
     if (passwordError) {
-      newErrors.password = passwordError;
+      setErrors((prev) => ({ ...prev, password: passwordError }));
     }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    if (!validate()) return;
-    
+
+    const normalizedEmail = normalizeEmail(formData.email);
+    const normalizedFormData = { ...formData, email: normalizedEmail };
+    setFormData(normalizedFormData);
+
+    const emailError = validateEmail(normalizedEmail);
+    const passwordError = validatePasswordSimple(formData.password);
+
+    if (emailError || passwordError) {
+      setErrors({ email: emailError, password: passwordError });
+      return;
+    }
+
     setIsLoading(true);
     try {
-      await login(formData);
+      await login(normalizedFormData);
       navigate(ROUTES.CHAT);
     } catch (err: any) {
-      // Get error message from API response
-      const errorDetail = err.response?.data?.detail;
-      let errorMessage = 'Login failed. Please try again.';
-      
-      // Handle detail field - can be string or array
-      if (errorDetail) {
-        if (typeof errorDetail === 'string') {
-          // detail is a string like "Incorrect email or password"
-          errorMessage = errorDetail;
-        } else if (Array.isArray(errorDetail) && errorDetail.length > 0) {
-          // detail is an array of error objects
-          errorMessage = errorDetail[0]?.msg || errorDetail[0]?.message || errorMessage;
-        }
-      } else if (err.response?.data?.message) {
-        errorMessage = err.response.data.message;
-      } else if (err.response?.status === 404) {
-        errorMessage = 'Service not found. Please check your connection.';
-      } else if (err.response?.status >= 500) {
-        errorMessage = 'Server error. Please try again later.';
-      } else if (err.message && !err.message.includes('404') && !err.message.includes('Network')) {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
+      setError(extractErrorMessage(err, 'Login failed. Please try again.'));
     } finally {
       setIsLoading(false);
     }
@@ -115,63 +84,49 @@ export const Login = () => {
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <ErrorAlert message={error} />
-        
+
         <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
         <Input
           type="email"
           placeholder="Enter your email"
           value={formData.email}
           onChange={(e) => {
-            setFormData({ ...formData, email: e.target.value });
+            setFormData((prev) => ({ ...prev, email: e.target.value }));
             if (errors.email) {
-              setErrors({ ...errors, email: undefined });
+              setErrors((prev) => ({ ...prev, email: undefined }));
             }
           }}
-          onBlur={() => {
-            const error = validateEmail(formData.email);
-            if (error) {
-              setErrors({ ...errors, email: error });
-            }
-          }}
+          onBlur={handleEmailBlur}
           error={errors.email}
           disabled={isLoading}
         />
-        
+
         <PasswordInput
           label="Password"
           placeholder="Enter your password"
           value={formData.password}
           onChange={(e) => {
-            setFormData({ ...formData, password: e.target.value });
+            setFormData((prev) => ({ ...prev, password: e.target.value }));
             if (errors.password) {
-              setErrors({ ...errors, password: undefined });
+              setErrors((prev) => ({ ...prev, password: undefined }));
             }
           }}
-          onBlur={() => {
-            const error = validatePassword(formData.password);
-            if (error) {
-              setErrors({ ...errors, password: error });
-            }
-          }}
+          onBlur={handlePasswordBlur}
           error={errors.password}
           disabled={isLoading}
         />
+
         <Link
           to={ROUTES.FORGOT_PASSWORD}
           className="text-sm text-primary-500 dark:text-primary-400 hover:text-primary-600 dark:hover:text-primary-300 mt-1.5 block text-right transition-colors"
         >
           Forgot password?
         </Link>
-        
-        <Button
-          type="submit"
-          className="w-full"
-          isLoading={isLoading}
-        >
+
+        <Button type="submit" className="w-full" isLoading={isLoading}>
           Sign In
         </Button>
       </form>
     </AuthLayout>
   );
 };
-

@@ -3,7 +3,12 @@
  * Falls back to default if not set
  */
 export const getApiBaseUrl = (): string => {
-  return import.meta.env.VITE_API_BASE_URL || 'http://192.168.0.142:8000/api';
+  const baseUrl = import.meta.env.VITE_API_BASE_URL;
+  if (!baseUrl) {
+    console.warn('VITE_API_BASE_URL is not set, using default: http://192.168.0.142:8000/api');
+    return 'http://192.168.0.142:8000/api';
+  }
+  return baseUrl;
 };
 
 // For backward compatibility

@@ -9,6 +9,9 @@ import { ErrorAlert } from '../../components/auth/ErrorAlert';
 import { DemoDataButton } from '../../components/auth/DemoDataButton';
 import { ROUTES } from '../../utils/constants';
 import { FiCheckCircle } from 'react-icons/fi';
+import { validateEmail } from '../../utils/validation';
+import { normalizeEmail } from '../../utils/normalize';
+import { extractErrorMessage } from '../../utils/errorHandler';
 
 export const ForgotPassword = () => {
   const { forgotPassword } = useAuth();
@@ -17,56 +20,36 @@ export const ForgotPassword = () => {
   const [isLoading, setIsLoading] = useState(false);
   const [isSuccess, setIsSuccess] = useState(false);
 
-  const validateEmail = (email: string): string | undefined => {
-    if (!email) {
-      return 'Email is required';
+  const handleEmailBlur = () => {
+    const normalized = normalizeEmail(email);
+    if (normalized !== email) {
+      setEmail(normalized);
     }
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      return 'Please enter a valid email address';
+    const emailError = validateEmail(normalized);
+    if (emailError) {
+      setError(emailError);
     }
-    return undefined;
   };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
-    
-    const emailError = validateEmail(email);
+
+    const normalizedEmail = normalizeEmail(email);
+    setEmail(normalizedEmail);
+
+    const emailError = validateEmail(normalizedEmail);
     if (emailError) {
       setError(emailError);
       return;
     }
-    
+
     setIsLoading(true);
     try {
-      await forgotPassword({ email });
+      await forgotPassword({ email: normalizedEmail });
       setIsSuccess(true);
     } catch (err: any) {
-      // Get error message from API response
-      const errorDetail = err.response?.data?.detail;
-      let errorMessage = 'Failed to send reset email. Please try again.';
-      
-      // Handle detail field - can be string or array
-      if (errorDetail) {
-        if (typeof errorDetail === 'string') {
-          // detail is a string like "Incorrect email or password"
-          errorMessage = errorDetail;
-        } else if (Array.isArray(errorDetail) && errorDetail.length > 0) {
-          // detail is an array of error objects
-          errorMessage = errorDetail[0]?.msg || errorDetail[0]?.message || errorMessage;
-        }
-      } else if (err.response?.data?.message) {
-        errorMessage = err.response.data.message;
-      } else if (err.response?.status === 404) {
-        errorMessage = 'Service not found. Please check your connection.';
-      } else if (err.response?.status >= 500) {
-        errorMessage = 'Server error. Please try again later.';
-      } else if (err.message && !err.message.includes('404') && !err.message.includes('Network')) {
-        errorMessage = err.message;
-      }
-      
-      setError(errorMessage);
+      setError(extractErrorMessage(err, 'Failed to send reset email. Please try again.'));
     } finally {
       setIsLoading(false);
     }
@@ -86,9 +69,12 @@ export const ForgotPassword = () => {
               <FiCheckCircle className="w-8 h-8 text-green-500 dark:text-green-400" />
             </div>
           </div>
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Email Sent!</h3>
+          <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+            Email Sent!
+          </h3>
           <p className="text-gray-600 dark:text-gray-400 mb-6">
-            We've sent a password reset link to <strong className="text-gray-900 dark:text-white">{email}</strong>
+            We've sent a password reset link to{' '}
+            <strong className="text-gray-900 dark:text-white">{email}</strong>
           </p>
           <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
             Please check your inbox and follow the instructions to reset your password.
@@ -114,9 +100,11 @@ export const ForgotPassword = () => {
     >
       <form onSubmit={handleSubmit} className="space-y-4">
         <ErrorAlert message={error} />
-        
+
         <div className="flex items-center justify-between">
-          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">Email</label>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+            Email
+          </label>
           <DemoDataButton onClick={fillDummyData} />
         </div>
         <Input
@@ -129,25 +117,15 @@ export const ForgotPassword = () => {
               setError('');
             }
           }}
-          onBlur={() => {
-            const emailError = validateEmail(email);
-            if (emailError) {
-              setError(emailError);
-            }
-          }}
-          error={error ? error : undefined}
+          onBlur={handleEmailBlur}
+          error={error || undefined}
           disabled={isLoading}
         />
-        
-        <Button
-          type="submit"
-          className="w-full"
-          isLoading={isLoading}
-        >
+
+        <Button type="submit" className="w-full" isLoading={isLoading}>
           Send Reset Link
         </Button>
       </form>
     </AuthLayout>
   );
 };
-

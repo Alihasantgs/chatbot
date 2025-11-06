@@ -1,18 +1,6 @@
 import axios from 'axios';
 import type { AxiosInstance, InternalAxiosRequestConfig, AxiosError } from 'axios';
-import { STORAGE_KEYS } from '../utils/constants';
-
-/**
- * Get API Base URL from environment variable
- */
-const getApiBaseUrl = (): string => {
-  const baseUrl = import.meta.env.VITE_API_BASE_URL;
-  if (!baseUrl) {
-    console.warn('VITE_API_BASE_URL is not set, using default: http://192.168.0.142:8000/api');
-    return 'http://192.168.0.142:8000/api';
-  }
-  return baseUrl;
-};
+import { STORAGE_KEYS, getApiBaseUrl } from '../utils/constants';
 
 /**
  * Create and configure Axios instance with interceptors
