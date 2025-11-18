@@ -1,9 +1,64 @@
-import { useState, useRef } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { FiSend, FiImage, FiX } from 'react-icons/fi';
+import { FiSend, FiImage, FiX, FiMic } from 'react-icons/fi';
 import { Button } from '../ui/Button';
 import { useChat } from '../../hooks/useChat';
 import { extractErrorMessage } from '../../utils/errorHandler';
+
+// Speech Recognition types
+interface SpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start(): void;
+  stop(): void;
+  abort(): void;
+  onstart: ((this: SpeechRecognition, ev: Event) => void) | null;
+  onresult: ((this: SpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  onerror: ((this: SpeechRecognition, ev: SpeechRecognitionErrorEvent) => void) | null;
+  onend: ((this: SpeechRecognition, ev: Event) => void) | null;
+}
+
+interface SpeechRecognitionEvent extends Event {
+  results: SpeechRecognitionResultList;
+  resultIndex: number;
+}
+
+interface SpeechRecognitionErrorEvent extends Event {
+  error: string;
+  message: string;
+}
+
+interface SpeechRecognitionResultList {
+  length: number;
+  item(index: number): SpeechRecognitionResult;
+  [index: number]: SpeechRecognitionResult;
+}
+
+interface SpeechRecognitionResult {
+  length: number;
+  item(index: number): SpeechRecognitionAlternative;
+  [index: number]: SpeechRecognitionAlternative;
+  isFinal: boolean;
+}
+
+interface SpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+declare var SpeechRecognition: {
+  prototype: SpeechRecognition;
+  new (): SpeechRecognition;
+};
+
+// Extend Window interface for SpeechRecognition
+declare global {
+  interface Window {
+    SpeechRecognition: typeof SpeechRecognition;
+    webkitSpeechRecognition: typeof SpeechRecognition;
+  }
+}
 
 export const ChatInput = () => {
   const { sendMessage, uploadImage, isSending } = useChat();
@@ -11,8 +66,10 @@ export const ChatInput = () => {
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [error, setError] = useState<string>('');
+  const [isListening, setIsListening] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -60,11 +117,87 @@ export const ChatInput = () => {
     }
   };
 
+  // Initialize Speech Recognition
+  useEffect(() => {
+    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+    
+    if (!SpeechRecognition) {
+      // Browser doesn't support speech recognition
+      return;
+    }
+
+    const recognition = new SpeechRecognition();
+    recognition.continuous = false;
+    recognition.interimResults = false;
+    recognition.lang = 'en-US';
+
+    recognition.onstart = () => {
+      setIsListening(true);
+      setError('');
+    };
+
+    recognition.onresult = (event) => {
+      const transcript = Array.from(event.results)
+        .map((result) => result[0].transcript)
+        .join('');
+      setMessage((prev) => (prev ? `${prev} ${transcript}` : transcript));
+    };
+
+    recognition.onerror = (event) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      if (event.error === 'no-speech') {
+        setError('No speech detected. Please try again.');
+      } else if (event.error === 'not-allowed') {
+        setError('Microphone permission denied. Please enable microphone access.');
+      } else {
+        setError('Speech recognition error. Please try again.');
+      }
+    };
+
+    recognition.onend = () => {
+      setIsListening(false);
+    };
+
+    recognitionRef.current = recognition;
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+    };
+  }, []);
+
+  const toggleVoiceRecognition = () => {
+    if (!recognitionRef.current) {
+      setError('Speech recognition is not supported in your browser.');
+      return;
+    }
+
+    if (isListening) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    } else {
+      try {
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error('Error starting speech recognition:', error);
+        setError('Failed to start voice recognition. Please try again.');
+      }
+    }
+  };
+
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
     setError('');
     
     if (isSending) return;
+    
+    // Stop voice recognition if active
+    if (isListening && recognitionRef.current) {
+      recognitionRef.current.stop();
+      setIsListening(false);
+    }
     
     if (imageFile) {
       // Upload image with message
@@ -156,7 +289,7 @@ export const ChatInput = () => {
               rows={1}
               disabled={isSending}
               className="
-                w-full px-3 sm:px-4 py-2.5 sm:py-3 pr-10 sm:pr-12 
+                w-full px-3 sm:px-4 py-2.5 sm:py-3 pr-20 sm:pr-24 
                 bg-white dark:bg-dark-800 
                 border border-gray-300 dark:border-dark-600 
                 rounded-lg
@@ -173,15 +306,32 @@ export const ChatInput = () => {
               style={{ minHeight: '44px', maxHeight: '128px' }}
             />
             {!imageFile && !imagePreview && (
-              <button
-                type="button"
-                onClick={() => fileInputRef.current?.click()}
-                disabled={isSending}
-                className="absolute right-2 bottom-2.5 sm:bottom-3 p-1.5 sm:p-2 text-gray-400 dark:text-gray-500 hover:text-primary-500 dark:hover:text-primary-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                aria-label="Upload image"
-              >
-                <FiImage className="w-4 h-4 sm:w-5 sm:h-5" />
-              </button>
+              <div className="absolute right-2 bottom-2.5 sm:bottom-3 flex gap-1">
+                <button
+                  type="button"
+                  onClick={toggleVoiceRecognition}
+                  disabled={isSending}
+                  className={`p-1.5 sm:p-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed rounded ${
+                    isListening
+                      ? 'text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 animate-pulse'
+                      : 'text-gray-400 dark:text-gray-500 hover:text-primary-500 dark:hover:text-primary-400'
+                  }`}
+                  aria-label={isListening ? 'Stop listening' : 'Start voice input'}
+                  title={isListening ? 'Stop listening' : 'Start voice input'}
+                >
+                  <FiMic className="w-4 h-4 sm:w-5 sm:h-5" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={isSending}
+                  className="p-1.5 sm:p-2 text-gray-400 dark:text-gray-500 hover:text-primary-500 dark:hover:text-primary-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                  aria-label="Upload image"
+                  title="Upload image"
+                >
+                  <FiImage className="w-4 h-4 sm:w-5 sm:h-5" />
+                </button>
+              </div>
             )}
             <input
               ref={fileInputRef}
