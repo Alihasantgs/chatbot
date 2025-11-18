@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { FiSend, FiImage, FiX, FiMic } from 'react-icons/fi';
+import { FiSend, FiImage, FiX, FiMic, FiMicOff } from 'react-icons/fi';
 import { Button } from '../ui/Button';
 import { useChat } from '../../hooks/useChat';
 import { extractErrorMessage } from '../../utils/errorHandler';
@@ -61,15 +61,29 @@ declare global {
 }
 
 export const ChatInput = () => {
-  const { sendMessage, uploadImage, isSending } = useChat();
+  const { sendMessage, sendVoiceMessage, uploadImage, isSending } = useChat();
   const [message, setMessage] = useState('');
   const [imageFile, setImageFile] = useState<File | null>(null);
   const [imagePreview, setImagePreview] = useState<string | null>(null);
   const [error, setError] = useState<string>('');
   const [isListening, setIsListening] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingTime, setRecordingTime] = useState(0);
+  const [shouldSend, setShouldSend] = useState(false);
+  const [audioLevel, setAudioLevel] = useState(0);
+  const [recordedAudioBlob, setRecordedAudioBlob] = useState<Blob | null>(null);
+  const [showSendOption, setShowSendOption] = useState(false);
+  const [savedRecordingTime, setSavedRecordingTime] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const audioChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const micButtonRef = useRef<HTMLButtonElement>(null);
+  const streamRef = useRef<MediaStream | null>(null);
 
   const handleImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -168,6 +182,253 @@ export const ChatInput = () => {
     };
   }, []);
 
+  // Convert audio blob to MP3 format
+  const convertToMP3 = async (audioBlob: Blob): Promise<File> => {
+    try {
+      // Create audio context
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const arrayBuffer = await audioBlob.arrayBuffer();
+      const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+      
+      // Convert to WAV first (simpler format)
+      const wav = audioBufferToWav(audioBuffer);
+      const wavBlob = new Blob([wav], { type: 'audio/wav' });
+      
+      // For now, send as audio/mpeg type - backend should handle conversion
+      // If backend is strict, we'd need to use lamejs here
+      const mp3File = new File([wavBlob], `voice-${Date.now()}.mp3`, {
+        type: 'audio/mpeg'
+      });
+      
+      return mp3File;
+    } catch (error) {
+      console.error('Error converting to MP3:', error);
+      // Fallback: send original blob with audio/mpeg type
+      return new File([audioBlob], `voice-${Date.now()}.mp3`, {
+        type: 'audio/mpeg'
+      });
+    }
+  };
+
+  // Convert AudioBuffer to WAV
+  const audioBufferToWav = (buffer: AudioBuffer): ArrayBuffer => {
+    const length = buffer.length;
+    const numberOfChannels = buffer.numberOfChannels;
+    const sampleRate = buffer.sampleRate;
+    const bytesPerSample = 2;
+    const blockAlign = numberOfChannels * bytesPerSample;
+    const byteRate = sampleRate * blockAlign;
+    const dataSize = length * blockAlign;
+    const bufferSize = 44 + dataSize;
+    const arrayBuffer = new ArrayBuffer(bufferSize);
+    const view = new DataView(arrayBuffer);
+    
+    // WAV header
+    const writeString = (offset: number, string: string) => {
+      for (let i = 0; i < string.length; i++) {
+        view.setUint8(offset + i, string.charCodeAt(i));
+      }
+    };
+    
+    writeString(0, 'RIFF');
+    view.setUint32(4, bufferSize - 8, true);
+    writeString(8, 'WAVE');
+    writeString(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true);
+    view.setUint16(22, numberOfChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, byteRate, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bytesPerSample * 8, true);
+    writeString(36, 'data');
+    view.setUint32(40, dataSize, true);
+    
+    // Write audio data
+    let offset = 44;
+    for (let i = 0; i < length; i++) {
+      for (let channel = 0; channel < numberOfChannels; channel++) {
+        const sample = Math.max(-1, Math.min(1, buffer.getChannelData(channel)[i]));
+        view.setInt16(offset, sample < 0 ? sample * 0x8000 : sample * 0x7FFF, true);
+        offset += 2;
+      }
+    }
+    
+    return arrayBuffer;
+  };
+
+  // Start audio recording
+  const startRecording = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      
+      // Setup audio context for visualization
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 256;
+      source.connect(analyser);
+      
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      
+      // Start audio level monitoring
+      let monitoring = true;
+      const monitorAudioLevel = () => {
+        if (!analyserRef.current || !monitoring) return;
+        
+        const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+        analyserRef.current.getByteFrequencyData(dataArray);
+        
+        const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+        setAudioLevel(Math.min(255, average * 2)); // Amplify for better visualization
+        
+        if (monitoring) {
+          requestAnimationFrame(monitorAudioLevel);
+        }
+      };
+      
+      const mediaRecorder = new MediaRecorder(stream, {
+        mimeType: MediaRecorder.isTypeSupported('audio/webm') ? 'audio/webm' : 'audio/mp4'
+      });
+      
+      audioChunksRef.current = [];
+      
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          audioChunksRef.current.push(event.data);
+        }
+      };
+      
+      mediaRecorder.onstop = async () => {
+        // Stop audio monitoring
+        monitoring = false;
+        if (audioContextRef.current) {
+          audioContextRef.current.close();
+        }
+        
+        const audioBlob = new Blob(audioChunksRef.current, { 
+          type: mediaRecorder.mimeType || 'audio/webm' 
+        });
+        
+        // Stop all tracks
+        stream.getTracks().forEach(track => track.stop());
+        
+        // If shouldSend is true (released), send immediately
+        if (shouldSend) {
+          try {
+            const mp3File = await convertToMP3(audioBlob);
+            await sendVoiceMessage(mp3File);
+            setError('');
+            setIsRecording(false);
+            setRecordingTime(0);
+            setAudioLevel(0);
+            setShouldSend(false);
+            setRecordedAudioBlob(null);
+            setShowSendOption(false);
+          } catch (err: unknown) {
+            setError(extractErrorMessage(err as Parameters<typeof extractErrorMessage>[0], 'Failed to send voice message. Please try again.'));
+            setIsRecording(false);
+            setRecordingTime(0);
+            setAudioLevel(0);
+            setShouldSend(false);
+          }
+        } else {
+          // User stopped manually, show send option
+          setRecordedAudioBlob(audioBlob);
+          setSavedRecordingTime(recordingTime);
+          setShowSendOption(true);
+          setIsRecording(false);
+          setAudioLevel(0);
+        }
+        
+        if (recordingTimerRef.current) {
+          clearInterval(recordingTimerRef.current);
+        }
+      };
+      
+      mediaRecorderRef.current = mediaRecorder;
+      mediaRecorder.start();
+      setIsRecording(true);
+      setRecordingTime(0);
+      setShouldSend(false);
+      
+      // Start timer
+      recordingTimerRef.current = setInterval(() => {
+        setRecordingTime(prev => prev + 1);
+      }, 1000);
+      
+      // Start audio level monitoring
+      monitorAudioLevel();
+      
+    } catch (error) {
+      console.error('Error starting recording:', error);
+      setError('Failed to access microphone. Please check permissions.');
+      setIsRecording(false);
+    }
+  };
+  
+  // Stop audio recording (show send option)
+  const stopRecording = () => {
+    setShouldSend(false);
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+      mediaRecorderRef.current.stop();
+    }
+  };
+  
+  // Send recorded audio
+  const sendRecordedAudio = async () => {
+    if (!recordedAudioBlob) return;
+    
+    try {
+      const mp3File = await convertToMP3(recordedAudioBlob);
+      await sendVoiceMessage(mp3File);
+      setError('');
+      setRecordedAudioBlob(null);
+      setShowSendOption(false);
+    } catch (err: unknown) {
+      setError(extractErrorMessage(err as Parameters<typeof extractErrorMessage>[0], 'Failed to send voice message. Please try again.'));
+    }
+  };
+  
+  // Discard recorded audio
+  const discardRecordedAudio = () => {
+    setRecordedAudioBlob(null);
+    setShowSendOption(false);
+    setRecordingTime(0);
+    setSavedRecordingTime(0);
+    setAudioLevel(0);
+  };
+  
+  // Handle mic button press (hold to record)
+  const handleMicPress = () => {
+    if (isSending || imageFile) return;
+    startRecording();
+  };
+  
+  const handleMicRelease = () => {
+    if (isRecording) {
+      // Mark to send and stop recording
+      setShouldSend(true);
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+    }
+  };
+  
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+        mediaRecorderRef.current.stop();
+      }
+      if (recordingTimerRef.current) {
+        clearInterval(recordingTimerRef.current);
+      }
+    };
+  }, []);
+
   const toggleVoiceRecognition = () => {
     if (!recognitionRef.current) {
       setError('Speech recognition is not supported in your browser.');
@@ -191,12 +452,17 @@ export const ChatInput = () => {
     e.preventDefault();
     setError('');
     
-    if (isSending) return;
+    if (isSending || isRecording) return;
     
     // Stop voice recognition if active
     if (isListening && recognitionRef.current) {
       recognitionRef.current.stop();
       setIsListening(false);
+    }
+    
+    // Don't send if recording
+    if (isRecording) {
+      return;
     }
     
     if (imageFile) {
@@ -242,6 +508,82 @@ export const ChatInput = () => {
 
   return (
     <div className="border-t border-gray-200 dark:border-dark-700 bg-white dark:bg-dark-900 flex-shrink-0">
+      {isRecording && (
+        <div className="px-3 sm:px-4 pt-2 sm:pt-3">
+          <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-3 py-2 rounded-lg text-xs sm:text-sm">
+            <div className="flex items-center gap-3">
+              {/* WhatsApp-style waveform animation */}
+              <div className="flex items-center gap-0.5 sm:gap-1 h-8">
+                {[...Array(30)].map((_, i) => {
+                  // Create dynamic heights based on audio level and position
+                  const baseHeight = 3;
+                  const maxHeight = 20;
+                  const variation = Math.sin((i / 30) * Math.PI * 2 + recordingTime * 2) * 0.3;
+                  const audioInfluence = (audioLevel / 255) * 0.7;
+                  const height = Math.max(baseHeight, baseHeight + (maxHeight - baseHeight) * (audioInfluence + variation + 0.3));
+                  const delay = i * 0.03;
+                  return (
+                    <div
+                      key={i}
+                      className="w-0.5 sm:w-1 bg-red-500 dark:bg-red-400 rounded-full transition-all duration-75"
+                      style={{
+                        height: `${height}px`,
+                        animation: `waveform ${0.4 + Math.random() * 0.4}s ease-in-out infinite alternate`,
+                        animationDelay: `${delay}s`
+                      }}
+                    />
+                  );
+                })}
+              </div>
+              
+              <div className="flex-1 flex items-center gap-2">
+                <div className="w-2 h-2 bg-red-500 rounded-full animate-pulse"></div>
+                <span className="font-medium">{Math.floor(recordingTime / 60)}:{(recordingTime % 60).toString().padStart(2, '0')}</span>
+              </div>
+              
+              <button
+                type="button"
+                onClick={stopRecording}
+                className="px-3 py-1 bg-red-500 hover:bg-red-600 dark:bg-red-600 dark:hover:bg-red-700 text-white rounded-lg font-semibold text-xs sm:text-sm transition-colors"
+              >
+                Stop
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      
+      {showSendOption && recordedAudioBlob && (
+        <div className="px-3 sm:px-4 pt-2 sm:pt-3">
+          <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 text-blue-700 dark:text-blue-400 px-3 py-2 rounded-lg text-xs sm:text-sm">
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2">
+                <FiMic className="w-4 h-4 sm:w-5 sm:h-5" />
+                <span className="font-medium">Voice recorded ({Math.floor(savedRecordingTime / 60)}:{(savedRecordingTime % 60).toString().padStart(2, '0')})</span>
+              </div>
+              
+              <div className="ml-auto flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={discardRecordedAudio}
+                  className="px-3 py-1 bg-gray-200 hover:bg-gray-300 dark:bg-dark-700 dark:hover:bg-dark-600 text-gray-700 dark:text-gray-300 rounded-lg font-semibold text-xs sm:text-sm transition-colors"
+                >
+                  Discard
+                </button>
+                <button
+                  type="button"
+                  onClick={sendRecordedAudio}
+                  disabled={isSending}
+                  className="px-3 py-1 bg-primary-500 hover:bg-primary-600 dark:bg-primary-600 dark:hover:bg-primary-700 text-white rounded-lg font-semibold text-xs sm:text-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1"
+                >
+                  <FiSend className="w-3 h-3 sm:w-4 sm:h-4" />
+                  Send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
       {error && (
         <div className="px-3 sm:px-4 pt-2 sm:pt-3">
           <div className="bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-400 px-3 py-2 rounded-lg text-xs sm:text-sm">
@@ -309,22 +651,8 @@ export const ChatInput = () => {
               <div className="absolute right-2 bottom-2.5 sm:bottom-3 flex gap-1">
                 <button
                   type="button"
-                  onClick={toggleVoiceRecognition}
-                  disabled={isSending}
-                  className={`p-1.5 sm:p-2 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed rounded ${
-                    isListening
-                      ? 'text-red-500 dark:text-red-400 bg-red-50 dark:bg-red-900/20 animate-pulse'
-                      : 'text-gray-400 dark:text-gray-500 hover:text-primary-500 dark:hover:text-primary-400'
-                  }`}
-                  aria-label={isListening ? 'Stop listening' : 'Start voice input'}
-                  title={isListening ? 'Stop listening' : 'Start voice input'}
-                >
-                  <FiMic className="w-4 h-4 sm:w-5 sm:h-5" />
-                </button>
-                <button
-                  type="button"
                   onClick={() => fileInputRef.current?.click()}
-                  disabled={isSending}
+                  disabled={isSending || isRecording}
                   className="p-1.5 sm:p-2 text-gray-400 dark:text-gray-500 hover:text-primary-500 dark:hover:text-primary-400 transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
                   aria-label="Upload image"
                   title="Upload image"
@@ -344,16 +672,38 @@ export const ChatInput = () => {
             />
           </div>
           
-          <Button
-            type="submit"
-            disabled={(!message.trim() && !imageFile) || isSending}
-            isLoading={isSending}
-            className="px-3 sm:px-4 py-2.5 sm:py-3 h-[44px] sm:h-[48px] flex-shrink-0 flex items-center justify-center min-w-[44px] sm:min-w-[52px]"
-            size="md"
-            aria-label="Send message"
-          >
-            {!isSending && <FiSend className="w-4 h-4 sm:w-5 sm:h-5" />}
-          </Button>
+          <div className="flex items-center gap-2">
+            {/* Mic Button - Always visible for voice recording */}
+            {!isRecording && (
+              <button
+                ref={micButtonRef}
+                type="button"
+                onMouseDown={handleMicPress}
+                onMouseUp={handleMicRelease}
+                onMouseLeave={handleMicRelease}
+                onTouchStart={handleMicPress}
+                onTouchEnd={handleMicRelease}
+                disabled={isSending || imageFile}
+                className="px-3 sm:px-4 py-2.5 sm:py-3 h-[44px] sm:h-[48px] flex-shrink-0 flex items-center justify-center min-w-[44px] sm:min-w-[52px] bg-gray-100 dark:bg-dark-700 hover:bg-gray-200 dark:hover:bg-dark-600 text-gray-600 dark:text-gray-300 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                aria-label="Hold to record voice message"
+                title="Hold to record voice message"
+              >
+                <FiMic className="w-4 h-4 sm:w-5 sm:h-5" />
+              </button>
+            )}
+            
+            {/* Send Button - For text and image messages */}
+            <Button
+              type="submit"
+              disabled={(!message.trim() && !imageFile) || isSending || isRecording}
+              isLoading={isSending}
+              className="px-3 sm:px-4 py-2.5 sm:py-3 h-[44px] sm:h-[48px] flex-shrink-0 flex items-center justify-center min-w-[44px] sm:min-w-[52px]"
+              size="md"
+              aria-label="Send message"
+            >
+              {!isSending && <FiSend className="w-4 h-4 sm:w-5 sm:h-5" />}
+            </Button>
+          </div>
         </div>
       </form>
     </div>

@@ -9,6 +9,7 @@ interface ChatContextType {
   isLoading: boolean;
   isSending: boolean;
   sendMessage: (content: string) => Promise<void>;
+  sendVoiceMessage: (voiceFile: File) => Promise<void>;
   uploadImage: (message: string, imageFile: File) => Promise<void>;
   loadChatHistory: (skip?: number, limit?: number) => Promise<void>;
   loadChatById: (chatId: string) => Promise<void>;
@@ -26,6 +27,8 @@ const convertChatMessageToMessage = (chatMessage: ChatMessage, isUser: boolean):
   role: isUser ? 'user' : 'assistant',
   timestamp: new Date(chatMessage.created_at),
   imageUrl: chatMessage.image_url || undefined,
+  voiceUrl: chatMessage.voice_url || undefined,
+  responseAudioUrl: chatMessage.response_audio_url || undefined,
 });
 
 // Convert chat_history array to messages array
@@ -99,6 +102,51 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
       });
     } catch (error) {
       console.error('Error sending message:', error);
+      throw error;
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const sendVoiceMessage = async (voiceFile: File): Promise<void> => {
+    if (!voiceFile) return;
+
+    setIsSending(true);
+    try {
+      const response: ChatResponse = await chatApi.sendVoiceMessage(voiceFile);
+      
+      // Convert current_chat to messages (user + assistant)
+      const currentUserMessage = convertChatMessageToMessage(response.current_chat, true);
+      const currentAssistantMessage = convertChatMessageToMessage(response.current_chat, false);
+      
+      // Append only current_chat messages to existing messages (don't reload all history)
+      setMessages((prevMessages) => {
+        // Check if this chat already exists (avoid duplicates)
+        const chatExists = prevMessages.some(msg => msg.id === response.current_chat.id);
+        if (chatExists) {
+          // If exists, replace it with new messages
+          return prevMessages
+            .filter(msg => msg.id !== response.current_chat.id)
+            .concat([currentUserMessage, currentAssistantMessage]);
+        }
+        // If new, just append
+        return [...prevMessages, currentUserMessage, currentAssistantMessage];
+      });
+      
+      // Update chat history (include current_chat if not already there)
+      setChatHistory((prevHistory) => {
+        const exists = prevHistory.find(chat => chat.id === response.current_chat.id);
+        if (exists) {
+          // Update existing chat
+          return prevHistory.map(chat => 
+            chat.id === response.current_chat.id ? response.current_chat : chat
+          );
+        }
+        // Add new chat
+        return [...prevHistory, response.current_chat];
+      });
+    } catch (error) {
+      console.error('Error sending voice message:', error);
       throw error;
     } finally {
       setIsSending(false);
@@ -223,6 +271,7 @@ export const ChatProvider = ({ children }: { children: ReactNode }) => {
     isLoading,
     isSending,
     sendMessage,
+    sendVoiceMessage,
     uploadImage,
     loadChatHistory,
     loadChatById,

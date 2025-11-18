@@ -10,9 +10,35 @@ export const chatApi = {
    * Send a text message to the chatbot
    */
   sendMessage: async (content: string): Promise<ChatResponse> => {
-    const { data } = await axiosInstance.post<ChatResponse>('/chat/message', {
-      message: content,
-    });
+    const { data } = await axiosInstance.post<ChatResponse>(
+      '/chat/message',
+      new URLSearchParams({ message: content }),
+      {
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+      }
+    );
+
+    return data;
+  },
+
+  /**
+   * Send a voice/audio message to the chatbot
+   */
+  sendVoiceMessage: async (voiceFile: File): Promise<ChatResponse> => {
+    const formData = new FormData();
+    formData.append('voice', voiceFile);
+
+    const { data } = await axiosInstance.post<ChatResponse>(
+      '/chat/voice',
+      formData,
+      {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      }
+    );
 
     return data;
   },

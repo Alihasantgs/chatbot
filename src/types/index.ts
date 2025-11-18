@@ -54,6 +54,8 @@ export interface ChatMessage {
   response: string;
   message_type: string;
   image_url?: string;
+  voice_url?: string;
+  response_audio_url?: string;
   created_at: string;
 }
 
@@ -69,6 +71,8 @@ export interface Message {
   role: 'user' | 'assistant';
   timestamp: Date;
   imageUrl?: string;
+  voiceUrl?: string;
+  responseAudioUrl?: string;
 }
 
 export interface Chat {
