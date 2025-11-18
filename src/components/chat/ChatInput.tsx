@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import type { FormEvent } from 'react';
-import { FiSend, FiImage, FiX, FiMic, FiMicOff } from 'react-icons/fi';
+import { FiSend, FiImage, FiX, FiMic } from 'react-icons/fi';
 import { Button } from '../ui/Button';
 import { useChat } from '../../hooks/useChat';
 import { extractErrorMessage } from '../../utils/errorHandler';
@@ -79,7 +79,7 @@ export const ChatInput = () => {
   const recognitionRef = useRef<SpeechRecognition | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
-  const recordingTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const recordingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const micButtonRef = useRef<HTMLButtonElement>(null);
@@ -429,24 +429,25 @@ export const ChatInput = () => {
     };
   }, []);
 
-  const toggleVoiceRecognition = () => {
-    if (!recognitionRef.current) {
-      setError('Speech recognition is not supported in your browser.');
-      return;
-    }
+  // Speech recognition function (currently not used, kept for future use)
+  // const toggleVoiceRecognition = () => {
+  //   if (!recognitionRef.current) {
+  //     setError('Speech recognition is not supported in your browser.');
+  //     return;
+  //   }
 
-    if (isListening) {
-      recognitionRef.current.stop();
-      setIsListening(false);
-    } else {
-      try {
-        recognitionRef.current.start();
-      } catch (error) {
-        console.error('Error starting speech recognition:', error);
-        setError('Failed to start voice recognition. Please try again.');
-      }
-    }
-  };
+  //   if (isListening) {
+  //     recognitionRef.current.stop();
+  //     setIsListening(false);
+  //   } else {
+  //     try {
+  //       recognitionRef.current.start();
+  //     } catch (error) {
+  //       console.error('Error starting speech recognition:', error);
+  //       setError('Failed to start voice recognition. Please try again.');
+  //     }
+  //   }
+  // };
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault();
@@ -683,7 +684,7 @@ export const ChatInput = () => {
                 onMouseLeave={handleMicRelease}
                 onTouchStart={handleMicPress}
                 onTouchEnd={handleMicRelease}
-                disabled={isSending || imageFile}
+                disabled={isSending || !!imageFile}
                 className="px-3 sm:px-4 py-2.5 sm:py-3 h-[44px] sm:h-[48px] flex-shrink-0 flex items-center justify-center min-w-[44px] sm:min-w-[52px] bg-gray-100 dark:bg-dark-700 hover:bg-gray-200 dark:hover:bg-dark-600 text-gray-600 dark:text-gray-300 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 aria-label="Hold to record voice message"
                 title="Hold to record voice message"

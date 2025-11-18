@@ -6,128 +6,14 @@ interface MessageBubbleProps {
   message: Message;
 }
 
-// Language detection function
-const detectLanguage = (text: string): string => {
-  const cleanText = text.trim().substring(0, 100);
-  
-  if (!cleanText) return 'en-US';
-  
-  // Check for Hindi/Devanagari script
-  if (/[\u0900-\u097F]/.test(cleanText)) {
-    return 'hi-IN';
-  }
-  
-  // Check for Arabic script
-  if (/[\u0600-\u06FF]/.test(cleanText)) {
-    return 'ar-SA';
-  }
-  
-  // Check for Chinese
-  if (/[\u4E00-\u9FFF]/.test(cleanText)) {
-    return 'zh-CN';
-  }
-  
-  // Check for Japanese
-  if (/[\u3040-\u309F\u30A0-\u30FF]/.test(cleanText)) {
-    return 'ja-JP';
-  }
-  
-  // Check for Korean
-  if (/[\uAC00-\uD7AF]/.test(cleanText)) {
-    return 'ko-KR';
-  }
-  
-  // Check for Russian
-  if (/[\u0400-\u04FF]/.test(cleanText)) {
-    return 'ru-RU';
-  }
-  
-  // Check for other Indian languages
-  if (/[\u0980-\u09FF]/.test(cleanText)) return 'bn-BD'; // Bengali
-  if (/[\u0B80-\u0BFF]/.test(cleanText)) return 'ta-IN'; // Tamil
-  if (/[\u0C00-\u0C7F]/.test(cleanText)) return 'te-IN'; // Telugu
-  if (/[\u0A80-\u0AFF]/.test(cleanText)) return 'gu-IN'; // Gujarati
-  if (/[\u0C80-\u0CFF]/.test(cleanText)) return 'kn-IN'; // Kannada
-  if (/[\u0D00-\u0D7F]/.test(cleanText)) return 'ml-IN'; // Malayalam
-  if (/[\u0A00-\u0A7F]/.test(cleanText)) return 'pa-IN'; // Punjabi
-  if (/[\u0E00-\u0E7F]/.test(cleanText)) return 'th-TH'; // Thai
-  
-  return 'en-US';
-};
-
-// Get best voice for language
-const getVoiceForLanguage = (voices: SpeechSynthesisVoice[], langCode: string): SpeechSynthesisVoice | null => {
-  if (!voices || voices.length === 0) return null;
-  
-  const lang = langCode.split('-')[0].toLowerCase();
-  
-  // Try exact match first
-  let voice = voices.find(v => v.lang.toLowerCase().startsWith(langCode.toLowerCase()));
-  
-  // Try language code match
-  if (!voice) {
-    voice = voices.find(v => v.lang.toLowerCase().startsWith(lang));
-  }
-  
-  // Try partial match
-  if (!voice) {
-    voice = voices.find(v => v.lang.toLowerCase().includes(lang));
-  }
-  
-  // Prefer natural/premium voices
-  if (!voice) {
-    voice = voices.find(v => 
-      v.name.toLowerCase().includes('natural') || 
-      v.name.toLowerCase().includes('premium') ||
-      v.name.toLowerCase().includes('enhanced')
-    );
-  }
-  
-  return voice || voices[0] || null;
-};
 
 export const MessageBubble = ({ message }: MessageBubbleProps) => {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
   const [isAudioPlaying, setIsAudioPlaying] = useState(false);
   const [audioDuration, setAudioDuration] = useState(0);
   const [audioCurrentTime, setAudioCurrentTime] = useState(0);
-  const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
-  const voicesLoadedRef = useRef(false);
-
-  // Load voices
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      return;
-    }
-
-    const loadVoices = () => {
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        voicesLoadedRef.current = true;
-      }
-    };
-
-    // Load voices immediately
-    loadVoices();
-
-    // Some browsers need this event
-    if (window.speechSynthesis.onvoiceschanged !== undefined) {
-      window.speechSynthesis.onvoiceschanged = loadVoices;
-    }
-
-    // Fallback: try loading after a delay
-    const timeout = setTimeout(loadVoices, 100);
-    
-    return () => {
-      clearTimeout(timeout);
-      if (window.speechSynthesis.onvoiceschanged) {
-        window.speechSynthesis.onvoiceschanged = null;
-      }
-    };
-  }, []);
 
   const handleCopy = async () => {
     try {
@@ -139,105 +25,16 @@ export const MessageBubble = ({ message }: MessageBubbleProps) => {
     }
   };
 
-  const handleSpeak = () => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-      alert('Text-to-speech is not supported in your browser.');
-      return;
-    }
-
-    if (isPlaying) {
-      // Stop speech
-      window.speechSynthesis.cancel();
-      setIsPlaying(false);
-      utteranceRef.current = null;
-    } else {
-      // Cancel any currently playing speech
-      window.speechSynthesis.cancel();
-      
-      // Detect language
-      const detectedLang = detectLanguage(message.content);
-      
-      // Create utterance
-      const utterance = new SpeechSynthesisUtterance(message.content);
-      utterance.lang = detectedLang;
-      utterance.rate = 1.0;
-      utterance.pitch = 1.0;
-      utterance.volume = 1.0;
-
-      // Get voices and select best one
-      const voices = window.speechSynthesis.getVoices();
-      if (voices.length > 0) {
-        const selectedVoice = getVoiceForLanguage(voices, detectedLang);
-        if (selectedVoice) {
-          utterance.voice = selectedVoice;
-          utterance.lang = selectedVoice.lang; // Use voice's language
-        }
-      } else {
-        // If voices not loaded, wait a bit and try again
-        setTimeout(() => {
-          const voices = window.speechSynthesis.getVoices();
-          if (voices.length > 0) {
-            const selectedVoice = getVoiceForLanguage(voices, detectedLang);
-            if (selectedVoice) {
-              utterance.voice = selectedVoice;
-              utterance.lang = selectedVoice.lang;
-            }
-          }
-          utteranceRef.current = utterance;
-          window.speechSynthesis.speak(utterance);
-          setIsPlaying(true);
-        }, 200);
-        return;
-      }
-
-      // Set up event handlers
-      utterance.onstart = () => {
-        setIsPlaying(true);
-      };
-
-      utterance.onend = () => {
-        setIsPlaying(false);
-        utteranceRef.current = null;
-      };
-
-      utterance.onerror = (event) => {
-        console.error('Speech synthesis error:', event);
-        setIsPlaying(false);
-        utteranceRef.current = null;
-        
-        // Try again with default settings if error occurs
-        if (event.error === 'not-allowed') {
-          alert('Please allow microphone/speech permissions in your browser settings.');
-        } else {
-          // Retry with simpler settings
-          const retryUtterance = new SpeechSynthesisUtterance(message.content);
-          retryUtterance.lang = 'en-US';
-          retryUtterance.rate = 1.0;
-          retryUtterance.pitch = 1.0;
-          retryUtterance.volume = 1.0;
-          
-          retryUtterance.onend = () => setIsPlaying(false);
-          retryUtterance.onerror = () => setIsPlaying(false);
-          
-          window.speechSynthesis.speak(retryUtterance);
-          setIsPlaying(true);
-        }
-      };
-
-      utteranceRef.current = utterance;
-      window.speechSynthesis.speak(utterance);
-      setIsPlaying(true);
-    }
-  };
-
-  // Cleanup on unmount or message change
+  // Cleanup audio on unmount or message change
   useEffect(() => {
     return () => {
-      if (utteranceRef.current && typeof window !== 'undefined' && 'speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        utteranceRef.current = null;
-        setIsPlaying(false);
+      if (audioRef.current) {
+        audioRef.current.pause();
+        audioRef.current = null;
       }
+      setIsAudioPlaying(false);
+      setAudioCurrentTime(0);
+      setAudioDuration(0);
     };
   }, [message.id]);
 
